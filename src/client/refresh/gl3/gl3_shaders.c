@@ -488,7 +488,7 @@ static const char* fragmentSrc3Dlm = MULTILINE_STRING(
 					float distLightToPos = length(lightToPos);
 					float fact = max(0, intens - distLightToPos - 52);
 
-					// move the light source a bit further above the surface ()()()
+					// move the light source a bit further above the surface 
 					// => helps if the lightsource is so close to the surface (e.g. grenades, rockets)
 					//    that the dot product below would return 0
 					// (light sources that are below the surface are filtered out by lightFlags)
