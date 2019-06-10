@@ -1242,11 +1242,6 @@ Info_ValueForKey(char *s, char *key)
 
 		while (*s != '\\' && *s)
 		{
-			if (!*s)
-			{
-				return "";
-			}
-
 			*o++ = *s++;
 		}
 
@@ -1307,11 +1302,6 @@ Info_RemoveKey(char *s, char *key)
 
 		while (*s != '\\' && *s)
 		{
-			if (!*s)
-			{
-				return;
-			}
-
 			*o++ = *s++;
 		}
 
@@ -1365,7 +1355,7 @@ Info_SetValueForKey(char *s, char *key, char *value)
 
 	if (strstr(key, ";"))
 	{
-		Com_Printf("Can't use keys or values with a semicolon\n");
+		Com_Printf("Can't use keys with a semicolon\n");
 		return;
 	}
 
