@@ -41,6 +41,12 @@ espan_t		*vid_polygon_spans = NULL;
 pixel_t		*vid_colormap = NULL;
 pixel_t		*vid_alphamap = NULL;
 static int	vid_minu, vid_minv, vid_maxu, vid_maxv;
+static int	vid_zminu, vid_zminv, vid_zmaxu, vid_zmaxv;
+
+// last position  on map
+static vec3_t	lastvieworg;
+static vec3_t	lastviewangles;
+qboolean	fastmoving;
 
 refimport_t	ri;
 
@@ -206,7 +212,81 @@ static void R_DrawBeam(const entity_t *e);
 
 /*
 ================
-Damage_VIDBuffer
+VID_DamageZBuffer
+
+Mark VID Z buffer as damaged and need to be recalculated
+================
+*/
+void
+VID_DamageZBuffer(int u, int v)
+{
+	// update U
+	if (vid_zminu > u)
+	{
+		vid_zminu = u;
+	}
+	if (vid_zmaxu < u)
+	{
+		vid_zmaxu = u;
+	}
+
+	// update V
+	if (vid_zminv > v)
+	{
+		vid_zminv = v;
+	}
+	if (vid_zmaxv < v)
+	{
+		vid_zmaxv = v;
+	}
+}
+
+// clean z damage state
+static void
+VID_NoDamageZBuffer(void)
+{
+	vid_zminu = vid.width;
+	vid_zmaxu = 0;
+	vid_zminv = vid.height;
+	vid_zmaxv = 0;
+}
+
+qboolean
+VID_CheckDamageZBuffer(int u, int v, int ucount, int vcount)
+{
+	if (vid_zminv > (v + vcount) || vid_zmaxv < v)
+	{
+		// can be used previous zbuffer
+		return false;
+	}
+
+	if (vid_zminu > u && vid_zminu > (u + ucount))
+	{
+		// can be used previous zbuffer
+		return false;
+	}
+
+	if (vid_zmaxu < u && vid_zmaxu < (u + ucount))
+	{
+		// can be used previous zbuffer
+		return false;
+	}
+	return true;
+}
+
+// Need to recalculate whole z buffer
+static void
+VID_WholeDamageZBuffer(void)
+{
+	vid_zminu = 0;
+	vid_zmaxu = vid.width;
+	vid_zminv = 0;
+	vid_zmaxv = vid.height;
+}
+
+/*
+================
+VID_DamageBuffer
 
 Mark VID buffer as damaged and need to be rewritten
 ================
@@ -333,6 +413,7 @@ R_UnRegister (void)
 static void RE_ShutdownContext(void);
 static void SWimp_CreateRender(void);
 static int RE_InitContext(void *win);
+static qboolean RE_SetMode(void);
 
 /*
 ===============
@@ -342,6 +423,9 @@ R_Init
 static qboolean
 RE_Init(void)
 {
+	R_Printf(PRINT_ALL, "Refresh: " REF_VERSION "\n");
+	R_Printf(PRINT_ALL, "Client: " YQ2VERSION "\n\n");
+
 	R_RegisterVariables ();
 	R_InitImages ();
 	Mod_Init ();
@@ -361,10 +445,18 @@ RE_Init(void)
 
 	Draw_GetPalette ();
 
-	// create the window
-	RE_BeginFrame( 0 );
+	/* set our "safe" mode */
+	sw_state.prev_mode = 4;
 
-	R_Printf(PRINT_ALL, "ref_soft version: "REF_VERSION"\n");
+	/* create the window and set up the context */
+	if (!RE_SetMode())
+	{
+		R_Printf(PRINT_ALL, "%s() could not R_SetMode()\n", __func__);
+		return false;
+	}
+
+	// create the window
+	ri.Vid_MenuInit();
 
 	return true;
 }
@@ -1079,7 +1171,7 @@ R_EdgeDrawing (void)
 
 //=======================================================================
 
-static void	R_GammaCorrectAndSetPalette(const unsigned char *pal);
+static void	R_GammaCorrectAndSetPalette(const unsigned char *palette);
 
 /*
 =============
@@ -1154,6 +1246,16 @@ R_SetLightLevel (const entity_t *currententity)
 	r_lightlevel->value = 150.0 * light[0];
 }
 
+static int
+VectorCompareRound(vec3_t v1, vec3_t v2)
+{
+	if ((int)(v1[0] - v2[0]) || (int)(v1[1] - v2[1]) || (int)(v1[2] - v2[2]))
+	{
+		return 0;
+	}
+
+	return 1;
+}
 
 /*
 ================
@@ -1177,6 +1279,21 @@ RE_RenderFrame (refdef_t *fd)
 	VectorCopy (fd->vieworg, r_refdef.vieworg);
 	VectorCopy (fd->viewangles, r_refdef.viewangles);
 
+	// compare current position with old
+	if (!VectorCompareRound(fd->vieworg, lastvieworg) ||
+	    !VectorCompare(fd->viewangles, lastviewangles))
+	{
+		fastmoving = true;
+	}
+	else
+	{
+		fastmoving = false;
+	}
+
+	// save position for next check
+	VectorCopy (fd->vieworg, lastvieworg);
+	VectorCopy (fd->viewangles, lastviewangles);
+
 	if (r_speeds->value || r_dspeeds->value)
 		r_time1 = SDL_GetTicks();
 
@@ -1199,6 +1316,16 @@ RE_RenderFrame (refdef_t *fd)
 		de_time1 = se_time2;
 	}
 
+	if (fastmoving)
+	{
+		// redraw all
+		VID_WholeDamageZBuffer();
+	}
+	else
+	{
+		// No Z rewrite required
+		VID_NoDamageZBuffer();
+	}
 	// Draw enemies, barrel etc...
 	// Use Z-Buffer mostly in read mode only.
 	R_DrawEntitiesOnList ();
@@ -1225,10 +1352,10 @@ RE_RenderFrame (refdef_t *fd)
 		D_WarpScreen ();
 
 	if (r_dspeeds->value)
+	{
 		da_time1 = SDL_GetTicks();
-
-	if (r_dspeeds->value)
 		da_time2 = SDL_GetTicks();
+	}
 
 	// Modify the palette (when taking hit or pickup item) so all colors are modified
 	R_CalcPalette ();
@@ -1284,6 +1411,11 @@ static rserr_t	SWimp_SetMode(int *pwidth, int *pheight, int mode, int fullscreen
 static void
 RE_BeginFrame( float camera_separation )
 {
+	while (r_mode->modified || vid_fullscreen->modified || r_vsync->modified)
+	{
+		RE_SetMode();
+	}
+
 	/*
 	** rebuild the gamma correction palette if necessary
 	*/
@@ -1291,57 +1423,93 @@ RE_BeginFrame( float camera_separation )
 	{
 		Draw_BuildGammaTable();
 		R_GammaCorrectAndSetPalette((const unsigned char * )d_8to24table);
+		// we need redraw everything
+		VID_WholeDamageBuffer();
+		// and backbuffer should be zeroed
+		memset(swap_buffers + ((swap_current + 1)&1), 0, vid.height * vid.width * sizeof(pixel_t));
 
 		vid_gamma->modified = false;
 		sw_overbrightbits->modified = false;
 	}
+}
 
-	while (r_mode->modified || vid_fullscreen->modified || r_vsync->modified)
+/*
+==================
+R_SetMode
+==================
+*/
+static qboolean
+RE_SetMode(void)
+{
+	int err;
+	int fullscreen;
+
+	fullscreen = (int)vid_fullscreen->value;
+
+	vid_fullscreen->modified = false;
+	r_mode->modified = false;
+	r_vsync->modified = false;
+
+	/* a bit hackish approach to enable custom resolutions:
+	   Glimp_SetMode needs these values set for mode -1 */
+	vid.width = r_customwidth->value;
+	vid.height = r_customheight->value;
+
+	/*
+	** if this returns rserr_invalid_fullscreen then it set the mode but not as a
+	** fullscreen mode, e.g. 320x200 on a system that doesn't support that res
+	*/
+	if ((err = SWimp_SetMode(&vid.width, &vid.height, r_mode->value, fullscreen)) == rserr_ok)
 	{
-		rserr_t err;
-
+		R_InitGraphics( vid.width, vid.height );
 		if (r_mode->value == -1)
 		{
-			vid.width = r_customwidth->value;
-			vid.height = r_customheight->value;
-		}
-
-		/*
-		** if this returns rserr_invalid_fullscreen then it set the mode but not as a
-		** fullscreen mode, e.g. 320x200 on a system that doesn't support that res
-		*/
-		if ((err = SWimp_SetMode( &vid.width, &vid.height, r_mode->value, vid_fullscreen->value)) == rserr_ok )
-		{
-			R_InitGraphics( vid.width, vid.height );
-
-			sw_state.prev_mode = r_mode->value;
-			vid_fullscreen->modified = false;
-			r_mode->modified = false;
-			r_vsync->modified = false;
+			sw_state.prev_mode = 4; /* safe default for custom mode */
 		}
 		else
 		{
-			if ( err == rserr_invalid_mode )
-			{
-				ri.Cvar_SetValue( "r_mode", sw_state.prev_mode );
-				R_Printf(PRINT_ALL, "%s: could not set mode", __func__);
-			}
-			else if ( err == rserr_invalid_fullscreen )
-			{
-				R_InitGraphics( vid.width, vid.height );
-
-				ri.Cvar_SetValue( "vid_fullscreen", 0);
-				R_Printf(PRINT_ALL, "%s: fullscreen unavailable in this mode",
-						__func__);
-				sw_state.prev_mode = r_mode->value;
-			}
-			else
-			{
-				ri.Sys_Error(ERR_FATAL, "%s: Catastrophic mode change failure",
-						__func__);
-			}
+			sw_state.prev_mode = r_mode->value;
 		}
 	}
+	else
+	{
+		if (err == rserr_invalid_fullscreen)
+		{
+			R_InitGraphics( vid.width, vid.height );
+
+			ri.Cvar_SetValue("vid_fullscreen", 0);
+			vid_fullscreen->modified = false;
+			R_Printf(PRINT_ALL, "%s() - fullscreen unavailable in this mode\n", __func__);
+
+			if ((SWimp_SetMode(&vid.width, &vid.height, r_mode->value, 0)) == rserr_ok)
+			{
+				return true;
+			}
+		}
+		else if (err == rserr_invalid_mode)
+		{
+			R_Printf(PRINT_ALL, "%s() - invalid mode\n", __func__);
+
+			if(r_mode->value == sw_state.prev_mode)
+			{
+				// trying again would result in a crash anyway, give up already
+				// (this would happen if your initing fails at all and your resolution already was 640x480)
+				return false;
+			}
+
+			ri.Cvar_SetValue("r_mode", sw_state.prev_mode);
+			r_mode->modified = false;
+		}
+
+		/* try setting it back to something safe */
+		if ((SWimp_SetMode(&vid.width, &vid.height, sw_state.prev_mode, 0)) != rserr_ok)
+		{
+			R_Printf(PRINT_ALL, "%s() - could not revert to safe mode\n", __func__);
+			return false;
+		}
+	}
+
+	return true;
 }
 
 /*
@@ -1923,11 +2091,9 @@ RE_CleanFrame(void)
 		Com_Printf("Can't lock texture: %s\n", SDL_GetError());
 		return;
 	}
+	// only cleanup texture without flush texture to screen
 	memset(pixels, 0, pitch * vid.height);
 	SDL_UnlockTexture(texture);
-
-	SDL_RenderCopy(renderer, texture, NULL, NULL);
-	SDL_RenderPresent(renderer);
 
 	// All changes flushed
 	VID_NoDamageBuffer();
@@ -2059,6 +2225,12 @@ SWimp_CreateRender(void)
 {
 	swap_current = 0;
 	swap_buffers = malloc(vid.height * vid.width * sizeof(pixel_t) * 2);
+	if (!swap_buffers)
+	{
+		ri.Sys_Error(ERR_FATAL, "%s: Can't allocate swapbuffer.", __func__);
+		// code never returns after ERR_FATAL
+		return;
+	}
 	swap_frames[0] = swap_buffers;
 	swap_frames[1] = swap_buffers + vid.height * vid.width * sizeof(pixel_t);
 	vid_buffer = swap_frames[swap_current&1];
@@ -2124,26 +2296,22 @@ void
 Sys_Error (char *error, ...)
 {
 	va_list		argptr;
-	char		text[1024];
+	char		text[4096]; // MAXPRINTMSG == 4096
 
-	va_start (argptr, error);
-	vsprintf (text, error, argptr);
-	va_end (argptr);
+	va_start(argptr, error);
+	vsnprintf(text, sizeof(text), error, argptr);
+	va_end(argptr);
 
 	ri.Sys_Error (ERR_FATAL, "%s", text);
 }
 
 void
-Com_Printf (char *fmt, ...)
+Com_Printf(char *msg, ...)
 {
-	va_list		argptr;
-	char		text[1024];
-
-	va_start (argptr, fmt);
-	vsprintf (text, fmt, argptr);
-	va_end (argptr);
-
-	R_Printf(PRINT_ALL, "%s", text);
+	va_list	argptr;
+	va_start(argptr, msg);
+	ri.Com_VPrintf(PRINT_ALL, msg, argptr);
+	va_end(argptr);
 }
 
 /*

@@ -140,7 +140,7 @@ Mod_ForName (char *name, qboolean crash)
 	if (i == mod_numknown)
 	{
 		if (mod_numknown == MAX_MOD_KNOWN)
-			ri.Sys_Error(ERR_DROP, "mod_numknown == MAX_MOD_KNOWN");
+			ri.Sys_Error(ERR_DROP, "%s: mod_numknown == MAX_MOD_KNOWN", __func__);
 		mod_numknown++;
 	}
 	strcpy (mod->name, name);
@@ -210,6 +210,7 @@ Mod_PointInLeaf (vec3_t p, model_t *model)
 	if (!model || !model->nodes)
 	{
 		ri.Sys_Error(ERR_DROP, "%s: bad model", __func__);
+		return NULL;
 	}
 
 	node = model->nodes;
@@ -961,7 +962,7 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 	dmodel_t 	*bm;
 
 	if (loadmodel != mod_known)
-		ri.Sys_Error(ERR_DROP, "Loaded a brush model after the world");
+		ri.Sys_Error(ERR_DROP, "%s: Loaded a brush model after the world", __func__);
 
 	header = (dheader_t *)buffer;
 
@@ -982,7 +983,7 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 	int hunkSize = 0;
 	hunkSize += calcLumpHunkSize(&header->lumps[LUMP_VERTEXES], sizeof(dvertex_t), sizeof(mvertex_t), 8);
 	hunkSize += calcLumpHunkSize(&header->lumps[LUMP_EDGES], sizeof(dedge_t), sizeof(medge_t), 13);
-	float surfEdgeCount = header->lumps[LUMP_SURFEDGES].filelen/sizeof(int);
+	float surfEdgeCount = (float)header->lumps[LUMP_SURFEDGES].filelen / sizeof(int);
 	if(surfEdgeCount < MAX_MAP_SURFEDGES) // else it errors out later anyway
 		hunkSize += calcLumpHunkSize(&header->lumps[LUMP_SURFEDGES], sizeof(int), sizeof(int), 24);
 
