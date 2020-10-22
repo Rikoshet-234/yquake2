@@ -30,7 +30,7 @@
 
 #include "../../common/header/common.h"
 
-#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
+#if defined(HAVE_EXECINFO)
 #include <execinfo.h>
 
 void
